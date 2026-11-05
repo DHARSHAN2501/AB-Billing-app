@@ -233,8 +233,8 @@ export const BillingConsole = () => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 flex items-center justify-between gap-4">
           
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-amber-500 to-orange-500 flex items-center justify-center shadow-lg shadow-amber-500/20 shrink-0">
-              <Receipt className="w-5 h-5 text-slate-950 font-black" />
+            <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl overflow-hidden shadow-lg shadow-amber-500/20 border border-amber-500/30 shrink-0 bg-slate-900">
+              <img src="/billing-app-icon.png" alt="Arunachala Bhavan Billing" className="w-full h-full object-cover" />
             </div>
             <div>
               <h1 className="text-lg font-black tracking-tight text-white leading-tight">Arunachala Bhavan</h1>
@@ -626,8 +626,8 @@ export const BillingConsole = () => {
                     </div>
 
                     <div className="pt-3 border-t border-slate-800 flex items-center justify-between text-base font-black text-white">
-                      <span className={`${isCancelledOrder(selectedOrder) ? 'text-rose-400' : 'text-amber-400'} flex items-center gap-1.5`}>
-                        <DollarSign className="w-5 h-5" />
+                      <span className={`${isCancelledOrder(selectedOrder) ? 'text-rose-400' : 'text-amber-400'} flex items-center gap-2`}>
+                        <img src="/billing-coin-icon.png" alt="S$" className="w-5 h-5 object-contain" />
                         {isCancelledOrder(selectedOrder) ? 'Order Voided (Amount Payable)' : 'Grand Total Payable'}
                       </span>
                       <span className={`text-xl ${isCancelledOrder(selectedOrder) ? 'text-rose-400' : 'text-amber-400'} font-black`}>
@@ -707,7 +707,7 @@ export const BillingConsole = () => {
               </div>
             ) : (
               <div className="bg-slate-900 rounded-3xl p-12 border border-slate-800 text-center space-y-4">
-                <Receipt className="w-12 h-12 text-slate-700 mx-auto" />
+                <img src="/billing-app-icon.png" alt="Billing POS" className="w-20 h-20 mx-auto rounded-3xl object-cover shadow-2xl border border-amber-500/30 opacity-90" />
                 <h3 className="text-base font-bold text-slate-300">No Order Selected</h3>
                 <p className="text-xs text-slate-500 max-w-xs mx-auto">
                   Select an active order from the left list or search by order number above to view receipt details.
@@ -723,6 +723,7 @@ export const BillingConsole = () => {
       <div className="hidden print:block fixed inset-0 bg-white text-black p-8 font-mono text-sm z-[9999]">
         {selectedOrder && (
           <div className="max-w-xs mx-auto space-y-4 text-center">
+            <img src="/billing-app-icon.png" alt="Arunachala Bhavan" className="w-14 h-14 mx-auto rounded-full object-cover mb-2 border border-black/20" />
             <h2 className="text-xl font-bold uppercase">ARUNACHALA BHAVAN</h2>
             <p className="text-xs">Authentic South & North Indian Restaurant</p>
             <div className="border-b border-dashed border-black my-2" />
