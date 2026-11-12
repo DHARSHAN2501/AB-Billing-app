@@ -1,4 +1,4 @@
-import { supabase, isSupabaseConfigured, localDB } from './supabase';
+import { supabase, isSupabaseConfigured } from './supabase';
 import { getOrders as ajaxGetOrders, markBillPaid as ajaxMarkBillPaid } from './api';
 
 // Helper to identify cancelled or cancel-requested orders
@@ -7,32 +7,59 @@ export const isCancelledOrder = (order) => {
   const s = String(order.order_status || order.status || '').toUpperCase().trim();
   const b = String(order.bill_status || '').toUpperCase().trim();
   return (
-    s === 'CANCELLED' || 
-    s === 'CANCEL_REQUESTED' || 
+    s === 'CANCELLED' ||
+    s === 'CANCEL_REQUESTED' ||
     s.includes('CANCEL') ||
-    b === 'CANCELLED' || 
+    b === 'CANCELLED' ||
     b === 'VOID'
   );
 };
+
+let cachedBillingOrders = null;
+
+function sortOrdersDesc(list) {
+  return [...list].sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+}
+
+function applyRealtimeOrderChange(currentList, payload) {
+  if (!Array.isArray(currentList) || !payload) return null;
+  const { eventType, new: newRow, old: oldRow } = payload;
+
+  if (eventType === 'DELETE') {
+    const delId = oldRow?.id;
+    if (!delId) return null;
+    return currentList.filter(o => o.id !== delId);
+  }
+
+  if (eventType === 'INSERT' || eventType === 'UPDATE') {
+    if (!newRow || !newRow.id) return null;
+    if (isCancelledOrder(newRow)) {
+      return currentList.filter(o => o.id !== newRow.id);
+    }
+    const idx = currentList.findIndex(o => o.id === newRow.id || (o.order_number && o.order_number === newRow.order_number));
+    if (idx >= 0) {
+      const next = [...currentList];
+      next[idx] = { ...next[idx], ...newRow };
+      return next;
+    }
+    return sortOrdersDesc([newRow, ...currentList]);
+  }
+
+  return null;
+}
 
 export const billingService = {
   getOrders: async () => {
     try {
       const remoteData = await ajaxGetOrders();
       if (remoteData && Array.isArray(remoteData)) {
-        try {
-          localDB.saveOrders(remoteData);
-        } catch (e) {}
-        return remoteData
-          .filter(o => !isCancelledOrder(o))
-          .sort((a, b) => {
-            return new Date(b.created_at || Date.now()) - new Date(a.created_at || Date.now());
-          });
+        cachedBillingOrders = sortOrdersDesc(remoteData.filter(o => !isCancelledOrder(o)));
+        return cachedBillingOrders;
       }
     } catch (e) {
-      console.warn('Billing API getOrders fallback to localDB:', e.message);
+      console.warn('Billing API getOrders error:', e.message);
     }
-    return (localDB.getOrders() || []).filter(o => !isCancelledOrder(o));
+    return cachedBillingOrders || [];
   },
 
   searchOrders: (orders, query) => {
@@ -59,37 +86,29 @@ export const billingService = {
   },
 
   markPaid: async (orderId, tableNumber) => {
-    // 1. Update local DB
-    localDB.markTablePaid(tableNumber, orderId);
-
-    // 2. Send API request with atomic race condition check
     let apiSuccess = true;
     try {
       const res = await ajaxMarkBillPaid(orderId);
       if (Array.isArray(res) && res.length === 0) {
         console.warn(`[Dual Cashier Guard] Order ${orderId} was already settled by another cashier.`);
         apiSuccess = false;
+      } else if (Array.isArray(cachedBillingOrders)) {
+        cachedBillingOrders = cachedBillingOrders.map(o =>
+          (o.id === orderId || o.order_number === orderId) ? { ...o, bill_status: 'PAID' } : o
+        );
       }
     } catch (e) {
-      console.warn('REST API markBillPaid warning:', e.message);
+      console.warn('REST API markBillPaid error:', e.message);
+      throw e;
     }
 
-    // 3. Broadcast Event across tabs & windows
-    const updateEventPayload = { 
-      orderId, 
-      tableNumber, 
-      bill_status: 'PAID', 
+    const updateEventPayload = {
+      orderId,
+      tableNumber,
+      bill_status: 'PAID',
       timestamp: Date.now(),
-      alreadyPaid: !apiSuccess 
+      alreadyPaid: !apiSuccess
     };
-
-    if (typeof BroadcastChannel !== 'undefined') {
-      try {
-        const bc = new BroadcastChannel('smart_rest_bc_orders');
-        bc.postMessage({ type: 'ORDER_BILL_PAID', detail: updateEventPayload });
-        bc.close();
-      } catch (e) {}
-    }
 
     try {
       window.dispatchEvent(new CustomEvent('smart_rest_event_orders', { detail: updateEventPayload }));
@@ -100,61 +119,43 @@ export const billingService = {
 
   subscribeToOrders: (callback) => {
     const cleanups = [];
+    let isRealtimeSubscribed = false;
+    let hasConnectedOnce = false;
 
-    // 1. Supabase Realtime Channel with Reconnect Reconciliation
     if (isSupabaseConfigured()) {
       try {
-        let channelConnected = false;
         const sub = supabase
           .channel('public:orders:billing')
           .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, payload => {
-            callback(payload);
+            const patched = applyRealtimeOrderChange(cachedBillingOrders, payload);
+            if (patched) {
+              cachedBillingOrders = patched;
+              callback({ eventType: payload.eventType, new: payload.new, old: payload.old, orders: patched });
+            } else {
+              callback(payload);
+            }
           })
           .subscribe((status) => {
             if (status === 'SUBSCRIBED') {
-              if (channelConnected) {
-                // Reconnected after disconnect — reconcile missed orders
+              isRealtimeSubscribed = true;
+              if (hasConnectedOnce) {
                 billingService.getOrders().then(fresh => {
                   callback({ eventType: 'RECONNECT_RESYNC', orders: fresh });
                 }).catch(() => {});
               }
-              channelConnected = true;
+              hasConnectedOnce = true;
             } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-              channelConnected = false;
+              isRealtimeSubscribed = false;
             }
           });
         cleanups.push(() => supabase.removeChannel(sub));
       } catch (e) {}
     }
 
-    // 2. BroadcastChannel for instant cross-tab real-time sync
-    if (typeof BroadcastChannel !== 'undefined') {
-      try {
-        const bc = new BroadcastChannel('smart_rest_bc_orders');
-        bc.onmessage = (event) => {
-          callback({ eventType: 'UPDATE', detail: event.data?.detail });
-        };
-        cleanups.push(() => bc.close());
-      } catch (e) {}
-    }
-
-    // 3. CustomEvent Listener
-    const customListener = (e) => callback({ eventType: 'UPDATE', detail: e.detail });
-    window.addEventListener('smart_rest_event_orders', customListener);
-    cleanups.push(() => window.removeEventListener('smart_rest_event_orders', customListener));
-
-    // 4. Storage Event Listener
-    const storageListener = (e) => {
-      if (e.key === 'smart_rest_orders') {
-        callback({ eventType: 'UPDATE' });
-      }
-    };
-    window.addEventListener('storage', storageListener);
-    cleanups.push(() => window.removeEventListener('storage', storageListener));
-
-    // 5. Adaptive Ajax Auto-Refresh Interval (Fallback polling when tab is visible, passing data directly)
+    // Fallback poll runs ONLY when WebSocket Realtime is not SUBSCRIBED and tab is visible
     let isPolling = false;
     const pollInterval = setInterval(async () => {
+      if (isRealtimeSubscribed) return;
       if (typeof document !== 'undefined' && document.hidden) return;
       if (isPolling) return;
       isPolling = true;
@@ -165,7 +166,7 @@ export const billingService = {
       } finally {
         isPolling = false;
       }
-    }, 8000);
+    }, 25000);
     cleanups.push(() => clearInterval(pollInterval));
 
     return () => {

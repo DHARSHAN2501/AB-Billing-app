@@ -1,5 +1,6 @@
 import React from 'react';
 import { BillingConsole } from './pages/BillingConsole';
+import { ToastContainer } from './components/Toast';
 
 function App() {
   React.useEffect(() => {
@@ -11,7 +12,12 @@ function App() {
     }
   }, []);
 
-  return <BillingConsole />;
+  return (
+    <>
+      <BillingConsole />
+      <ToastContainer />
+    </>
+  );
 }
 
 export default App;

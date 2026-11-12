@@ -21,6 +21,7 @@ import {
   XCircle
 } from 'lucide-react';
 import { billingService } from '../services/billingService';
+import { showToast } from '../components/Toast';
 
 // Helper to identify cancelled or cancel-requested orders
 export const isCancelledOrder = (order) => {
@@ -82,16 +83,23 @@ export const BillingConsole = () => {
     }
   };
 
-  useEffect(() => {
-    fetchOrders();
+  const fetchOrdersRef = React.useRef(fetchOrders);
+  fetchOrdersRef.current = fetchOrders;
 
-    // Subscribe to real-time order updates
+  useEffect(() => {
+    fetchOrdersRef.current();
+
+    // Subscribe to real-time order updates once on mount
     const unsubscribe = billingService.subscribeToOrders((event) => {
-      fetchOrders(event?.orders || null);
+      if (event?.orders) {
+        fetchOrdersRef.current(event.orders);
+      } else {
+        fetchOrdersRef.current(null);
+      }
     });
 
     return () => unsubscribe();
-  }, [activeTab]);
+  }, []);
 
   // Filter orders based on active tab and search query
   const filteredOrders = useMemo(() => {
@@ -124,7 +132,11 @@ export const BillingConsole = () => {
   // Handle Mark Paid
   const handleMarkPaid = async (order) => {
     if (!order || isCancelledOrder(order)) {
-      alert('This order has been cancelled. Payment cannot be collected.');
+      showToast({
+        title: 'Blocked',
+        message: 'This order has been cancelled. Payment cannot be collected.',
+        variant: 'warning'
+      });
       return;
     }
     setProcessingPaid(true);
@@ -134,12 +146,16 @@ export const BillingConsole = () => {
       const orderNum = order.order_number || order.id;
       const isDeliv = isDeliveryOrder(order);
       if (isNewlySettled === false) {
-        setSuccessBanner(`Bill for #${orderNum} was already settled by another cashier or session.`);
+        const msg = `Bill for #${orderNum} was already settled by another cashier or session.`;
+        setSuccessBanner(msg);
+        showToast({ title: 'Updated', message: msg, variant: 'info' });
       } else {
         const orderTypeLabel = isDeliv 
           ? `Home Delivery (Customer: ${order.customer_name || 'Guest'})` 
           : `Dine-In (Table ${order.table_number || 'N/A'})`;
-        setSuccessBanner(`✓ ${orderTypeLabel} Bill for Order #${orderNum} marked as PAID successfully!`);
+        const msg = `${orderTypeLabel} Bill for Order #${orderNum} marked as PAID!`;
+        setSuccessBanner(`✓ ${msg}`);
+        showToast({ title: 'Completed', message: msg, variant: 'success' });
       }
       
       const latestOrders = await billingService.getOrders();
@@ -159,7 +175,11 @@ export const BillingConsole = () => {
         setSuccessBanner(null);
       }, 4000);
     } catch (err) {
-      alert('Failed to update bill status: ' + err.message);
+      showToast({
+        title: 'Error',
+        message: 'Failed to update bill status: ' + err.message,
+        variant: 'danger'
+      });
     } finally {
       setProcessingPaid(false);
     }
@@ -167,6 +187,13 @@ export const BillingConsole = () => {
 
   // Handle Print Receipt
   const handlePrint = () => {
+    if (selectedOrder) {
+      showToast({
+        title: 'Completed',
+        message: `Receipt for Order #${selectedOrder.order_number || selectedOrder.id} sent to printer.`,
+        variant: 'success'
+      });
+    }
     window.print();
   };
 
@@ -444,7 +471,7 @@ export const BillingConsole = () => {
                               {details.items.length} {details.items.length === 1 ? 'dish' : 'dishes'}
                             </span>
                             <span className="text-amber-400 font-black text-sm">
-                              ₹{details.total.toFixed(2)}
+                              ${details.total.toFixed(2)}
                             </span>
                           </div>
                         </div>
@@ -509,7 +536,7 @@ export const BillingConsole = () => {
                     <XCircle className="w-5 h-5 text-rose-400 shrink-0" />
                     <div>
                       <p className="font-extrabold text-sm text-rose-200">Order Cancelled — Voided</p>
-                      <p className="text-rose-400/90 font-normal">This order has been cancelled. Bill payment is disabled and payable amount is ₹0.00.</p>
+                      <p className="text-rose-400/90 font-normal">This order has been cancelled. Bill payment is disabled and payable amount is $0.00.</p>
                     </div>
                   </div>
                 )}
@@ -601,10 +628,10 @@ export const BillingConsole = () => {
                                 {item.quantity}
                               </td>
                               <td className="py-3 px-3 text-right font-medium text-slate-400">
-                                ₹{item.price.toFixed(2)}
+                                ${item.price.toFixed(2)}
                               </td>
                               <td className="py-3 px-4 text-right font-extrabold text-white">
-                                ₹{item.total.toFixed(2)}
+                                ${item.total.toFixed(2)}
                               </td>
                             </tr>
                           ))
@@ -617,12 +644,12 @@ export const BillingConsole = () => {
                   <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800 space-y-2.5 text-xs">
                     <div className="flex items-center justify-between text-slate-400 font-medium">
                       <span>Subtotal (Items Total)</span>
-                      <span>₹{currentBill.subtotal.toFixed(2)}</span>
+                      <span>${currentBill.subtotal.toFixed(2)}</span>
                     </div>
 
                     <div className="flex items-center justify-between text-slate-400 font-medium">
                       <span>GST Tax (5%)</span>
-                      <span>₹{currentBill.tax.toFixed(2)}</span>
+                      <span>${currentBill.tax.toFixed(2)}</span>
                     </div>
 
                     <div className="pt-3 border-t border-slate-800 flex items-center justify-between text-base font-black text-white">
@@ -631,7 +658,7 @@ export const BillingConsole = () => {
                         {isCancelledOrder(selectedOrder) ? 'Order Voided (Amount Payable)' : 'Grand Total Payable'}
                       </span>
                       <span className={`text-xl ${isCancelledOrder(selectedOrder) ? 'text-rose-400' : 'text-amber-400'} font-black`}>
-                        ₹{currentBill.total.toFixed(2)}
+                        ${currentBill.total.toFixed(2)}
                       </span>
                     </div>
                   </div>
@@ -692,8 +719,8 @@ export const BillingConsole = () => {
                               <ShieldCheck className="w-5 h-5" />
                               <span>
                                 {isDeliveryOrder(selectedOrder)
-                                  ? `Mark Home Delivery Paid (₹${currentBill.total.toFixed(2)})`
-                                  : `Mark Table #${selectedOrder.table_number || '1'} Paid (₹${currentBill.total.toFixed(2)})`}
+                                  ? `Mark Home Delivery Paid ($${currentBill.total.toFixed(2)})`
+                                  : `Mark Table #${selectedOrder.table_number || '1'} Paid ($${currentBill.total.toFixed(2)})`}
                               </span>
                             </>
                           )}
@@ -753,16 +780,16 @@ export const BillingConsole = () => {
                   <tr key={i}>
                     <td>{item.name}</td>
                     <td className="text-center">{item.quantity}</td>
-                    <td className="text-right">₹{item.total.toFixed(2)}</td>
+                    <td className="text-right">${item.total.toFixed(2)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
             <div className="border-b border-dashed border-black my-2" />
             <div className="text-right text-xs space-y-1">
-              <p>Subtotal: ₹{currentBill.subtotal.toFixed(2)}</p>
-              <p>GST (5%): ₹{currentBill.tax.toFixed(2)}</p>
-              <p className="font-bold text-sm">TOTAL: ₹{currentBill.total.toFixed(2)}</p>
+              <p>Subtotal: ${currentBill.subtotal.toFixed(2)}</p>
+              <p>GST (5%): ${currentBill.tax.toFixed(2)}</p>
+              <p className="font-bold text-sm">TOTAL: ${currentBill.total.toFixed(2)}</p>
             </div>
             <div className="border-b border-dashed border-black my-2" />
             <p className="text-xs font-bold">Thank You For Dining With Us!</p>
